@@ -37,6 +37,18 @@
 #define MS_NOATIME 	MNT_NOATIME
 
 #define umount2(mnt, flags) unmount(mnt, (flags == 2) ? MNT_FORCE : 0)
+#endif	/* __NetBSD__ */
+
+#ifdef __CYGWIN__
+#define MS_RDONLY	MOUNT_RO
+#define MS_NOSUID 	0x1000000
+#define MS_NODEV 	0x2000000
+#define MS_NOEXEC 	0x4000000
+#define MS_SYNCHRONOUS 	0x8000000
+#define MS_NOATIME 	0x10000000
+/* Need to | MOUNT_FUSE here. */
+#define mount(s, t, f, m, d) mount(d, t, ((m)|0x200000))
+#define umount2(mnt, flag) umount(mnt)
 #endif
 
 #define FUSERMOUNT_PROG		"fusermount"

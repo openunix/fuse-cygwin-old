@@ -31,6 +31,7 @@
 #include <sys/stat.h>
 #include <sys/statvfs.h>
 #include <sys/uio.h>
+#include <sys/file.h>
 
 #ifdef __cplusplus
 extern "C" {

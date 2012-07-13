@@ -24,10 +24,16 @@
 #include <sys/mount.h>
 #include <sys/param.h>
 
+#ifdef __CYGWIN__
+#define umount2(mnt, flags) umount(mnt)
+#define mtab_needs_update(mnt) 0
+#endif
+
 #ifdef __NetBSD__
 #define umount2(mnt, flags) unmount(mnt, (flags == 2) ? MNT_FORCE : 0)
 #define mtab_needs_update(mnt) 0
 #else
+#ifndef __CYGWIN__
 static int mtab_needs_update(const char *mnt)
 {
 	int res;
@@ -71,6 +77,7 @@ static int mtab_needs_update(const char *mnt)
 
 	return 1;
 }
+#endif
 #endif /* __NetBSD__ */
 
 static int add_mount(const char *progname, const char *fsname,

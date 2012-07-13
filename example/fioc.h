@@ -11,6 +11,16 @@
 #include <sys/uio.h>
 #include <sys/ioctl.h>
 
+#ifndef _IO
+# define _IO(x, y) (y)
+#endif
+#ifndef _IOR
+# define _IOR(x, y, z) _IO(x, y)
+#endif
+#ifndef _IOW
+# define _IOW(x, y, z) _IOR(x, y, z)
+#endif
+
 enum {
 	FIOC_GET_SIZE	= _IOR('E', 0, size_t),
 	FIOC_SET_SIZE	= _IOW('E', 1, size_t),
