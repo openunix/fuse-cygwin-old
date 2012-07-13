@@ -1717,6 +1717,20 @@ static void do_poll(fuse_req_t req, fuse_ino_t nodeid, const void *inarg)
 	}
 }
 
+static void do_fallocate(fuse_req_t req, fuse_ino_t nodeid, const void *inarg)
+{
+	struct fuse_fallocate_in *arg = (struct fuse_fallocate_in *) inarg;
+	struct fuse_file_info fi;
+
+	memset(&fi, 0, sizeof(fi));
+	fi.fh = arg->fh;
+
+	if (req->f->op.fallocate)
+		req->f->op.fallocate(req, nodeid, arg->mode, arg->offset, arg->length, &fi);
+	else
+		fuse_reply_err(req, ENOSYS);
+}
+
 static void do_init(fuse_req_t req, fuse_ino_t nodeid, const void *inarg)
 {
 	struct fuse_init_in *arg = (struct fuse_init_in *) inarg;
@@ -2028,6 +2042,9 @@ int fuse_lowlevel_notify_delete(struct fuse_chan *ch,
 	if (!f)
 		return -ENODEV;
 
+	if (f->conn.proto_minor < 18)
+		return -ENOSYS;
+
 	outarg.parent = parent;
 	outarg.child = child;
 	outarg.namelen = namelen;
@@ -2058,6 +2075,9 @@ int fuse_lowlevel_notify_store(struct fuse_chan *ch, fuse_ino_t ino,
 	f = (struct fuse_ll *)fuse_session_data(fuse_chan_session(ch));
 	if (!f)
 		return -ENODEV;
+
+	if (f->conn.proto_minor < 15)
+		return -ENOSYS;
 
 	out.unique = 0;
 	out.error = FUSE_NOTIFY_STORE;
@@ -2137,6 +2157,9 @@ int fuse_lowlevel_notify_retrieve(struct fuse_chan *ch, fuse_ino_t ino,
 	f = (struct fuse_ll *)fuse_session_data(fuse_chan_session(ch));
 	if (!f)
 		return -ENODEV;
+
+	if (f->conn.proto_minor < 15)
+		return -ENOSYS;
 
 	rreq = malloc(sizeof(*rreq));
 	if (rreq == NULL)
@@ -2258,6 +2281,7 @@ static struct {
 	[FUSE_BMAP]	   = { do_bmap,	       "BMAP"	     },
 	[FUSE_IOCTL]	   = { do_ioctl,       "IOCTL"	     },
 	[FUSE_POLL]	   = { do_poll,        "POLL"	     },
+	[FUSE_FALLOCATE]   = { do_fallocate,   "FALLOCATE"   },
 	[FUSE_DESTROY]	   = { do_destroy,     "DESTROY"     },
 	[FUSE_NOTIFY_REPLY] = { (void *) 1,    "NOTIFY_REPLY" },
 	[FUSE_BATCH_FORGET] = { do_batch_forget, "BATCH_FORGET" },
@@ -2443,7 +2467,7 @@ enum {
 	KEY_VERSION,
 };
 
-static struct fuse_opt fuse_ll_opts[] = {
+static const struct fuse_opt fuse_ll_opts[] = {
 	{ "debug", offsetof(struct fuse_ll, debug), 1 },
 	{ "-d", offsetof(struct fuse_ll, debug), 1 },
 	{ "allow_root", offsetof(struct fuse_ll, allow_root), 1 },
