@@ -6,7 +6,7 @@
   See the file COPYING.LIB
 */
 
-#define FUSE_USE_VERSION 26
+#define FUSE_USE_VERSION 30
 
 #include <fuse.h>
 #include <stdio.h>
@@ -631,7 +631,6 @@ static const struct fuse_operations iconv_oper = {
 	.flock		= iconv_flock,
 	.bmap		= iconv_bmap,
 
-	.flag_nullpath_ok = 1,
 	.flag_nopath = 1,
 };
 

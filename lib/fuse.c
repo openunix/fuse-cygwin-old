@@ -14,8 +14,6 @@
 #include "fuse_lowlevel.h"
 #include "fuse_opt.h"
 #include "fuse_misc.h"
-#include "fuse_common_compat.h"
-#include "fuse_compat.h"
 #include "fuse_kernel.h"
 
 #include <stdio.h>
@@ -80,7 +78,6 @@ struct fuse_fs {
 	struct fuse_operations op;
 	struct fuse_module *m;
 	void *user_data;
-	int compat;
 	int debug;
 };
 
@@ -131,7 +128,6 @@ struct fuse {
 	struct fuse_config conf;
 	int intr_installed;
 	struct fuse_fs *fs;
-	int nullpath_ok;
 	int utime_omit_ok;
 	int curr_ticket;
 	struct lock_queue_element *lockq;
@@ -325,12 +321,12 @@ static void list_add(struct list_head *new, struct list_head *prev,
 	prev->next = new;
 }
 
-static void list_add_head(struct list_head *new, struct list_head *head)
+static inline void list_add_head(struct list_head *new, struct list_head *head)
 {
 	list_add(new, head, head->next);
 }
 
-static void list_add_tail(struct list_head *new, struct list_head *head)
+static inline void list_add_tail(struct list_head *new, struct list_head *head)
 {
 	list_add(new, head->prev, head);
 }
@@ -423,6 +419,7 @@ static struct node *alloc_node(struct fuse *f)
 		list_del(&slab->list);
 		list_add_tail(&slab->list, &f->full_slabs);
 	}
+	memset(node, 0, sizeof(struct node));
 
 	return (struct node *) node;
 }
@@ -816,6 +813,13 @@ static struct node *lookup_node(struct fuse *f, fuse_ino_t parent,
 	return NULL;
 }
 
+static void inc_nlookup(struct node *node)
+{
+	if (!node->nlookup)
+		node->refctr++;
+	node->nlookup++;
+}
+
 static struct node *find_node(struct fuse *f, fuse_ino_t parent,
 			      const char *name)
 {
@@ -831,15 +835,11 @@ static struct node *find_node(struct fuse *f, fuse_ino_t parent,
 		if (node == NULL)
 			goto out_err;
 
-		if (f->conf.remember)
-			node->nlookup = 1;
-		node->refctr = 1;
 		node->nodeid = next_id(f);
 		node->generation = f->generation;
-		node->open_count = 0;
-		node->is_hidden = 0;
-		node->treelock = 0;
-		node->ticket = 0;
+		if (f->conf.remember)
+			inc_nlookup(node);
+
 		if (hash_name(f, node, parent, name) == -1) {
 			free_node(f, node);
 			node = NULL;
@@ -853,7 +853,7 @@ static struct node *find_node(struct fuse *f, fuse_ino_t parent,
 	} else if (lru_enabled(f) && node->nlookup == 1) {
 		remove_node_lru(node);
 	}
-	node->nlookup ++;
+	inc_nlookup(node);
 out_err:
 	pthread_mutex_unlock(&f->lock);
 	return node;
@@ -1127,7 +1127,7 @@ static int get_path_nullok(struct fuse *f, fuse_ino_t nodeid, char **path)
 		*path = NULL;
 	} else {
 		err = get_path_common(f, nodeid, NULL, path, NULL);
-		if (err == -ENOENT && f->nullpath_ok)
+		if (err == -ENOENT)
 			err = 0;
 	}
 
@@ -1162,7 +1162,7 @@ static int try_get_path2(struct fuse *f, fuse_ino_t nodeid1, const char *name1,
 			struct node *wn1 = wnode1 ? *wnode1 : NULL;
 
 			unlock_path(f, nodeid1, wn1, NULL, ticket);
-			free(path1);
+			free(*path1);
 			if (ticket && err != -EAGAIN)
 				release_tickets(f, nodeid1, wn1, ticket);
 		}
@@ -1407,129 +1407,6 @@ static inline void fuse_prepare_interrupt(struct fuse *f, fuse_req_t req,
 		fuse_do_prepare_interrupt(req, d);
 }
 
-#if !defined(__FreeBSD__) && !defined(__NetBSD__)
-
-static int fuse_compat_open(struct fuse_fs *fs, const char *path,
-			    struct fuse_file_info *fi)
-{
-	int err;
-	if (!fs->compat || fs->compat >= 25)
-		err = fs->op.open(path, fi);
-	else if (fs->compat == 22) {
-		struct fuse_file_info_compat tmp;
-		memcpy(&tmp, fi, sizeof(tmp));
-		err = ((struct fuse_operations_compat22 *) &fs->op)->open(path,
-									  &tmp);
-		memcpy(fi, &tmp, sizeof(tmp));
-		fi->fh = tmp.fh;
-	} else
-		err = ((struct fuse_operations_compat2 *) &fs->op)
-			->open(path, fi->flags);
-	return err;
-}
-
-static int fuse_compat_release(struct fuse_fs *fs, const char *path,
-			       struct fuse_file_info *fi)
-{
-	if (!fs->compat || fs->compat >= 22)
-		return fs->op.release(path, fi);
-	else
-		return ((struct fuse_operations_compat2 *) &fs->op)
-			->release(path, fi->flags);
-}
-
-static int fuse_compat_opendir(struct fuse_fs *fs, const char *path,
-			       struct fuse_file_info *fi)
-{
-	if (!fs->compat || fs->compat >= 25)
-		return fs->op.opendir(path, fi);
-	else {
-		int err;
-		struct fuse_file_info_compat tmp;
-		memcpy(&tmp, fi, sizeof(tmp));
-		err = ((struct fuse_operations_compat22 *) &fs->op)
-			->opendir(path, &tmp);
-		memcpy(fi, &tmp, sizeof(tmp));
-		fi->fh = tmp.fh;
-		return err;
-	}
-}
-
-static void convert_statfs_compat(struct fuse_statfs_compat1 *compatbuf,
-				  struct statvfs *stbuf)
-{
-	stbuf->f_bsize	 = compatbuf->block_size;
-	stbuf->f_blocks	 = compatbuf->blocks;
-	stbuf->f_bfree	 = compatbuf->blocks_free;
-	stbuf->f_bavail	 = compatbuf->blocks_free;
-	stbuf->f_files	 = compatbuf->files;
-	stbuf->f_ffree	 = compatbuf->files_free;
-	stbuf->f_namemax = compatbuf->namelen;
-}
-
-static void convert_statfs_old(struct statfs *oldbuf, struct statvfs *stbuf)
-{
-	stbuf->f_bsize	 = oldbuf->f_bsize;
-	stbuf->f_blocks	 = oldbuf->f_blocks;
-	stbuf->f_bfree	 = oldbuf->f_bfree;
-	stbuf->f_bavail	 = oldbuf->f_bavail;
-	stbuf->f_files	 = oldbuf->f_files;
-	stbuf->f_ffree	 = oldbuf->f_ffree;
-	stbuf->f_namemax = oldbuf->f_namelen;
-}
-
-static int fuse_compat_statfs(struct fuse_fs *fs, const char *path,
-			      struct statvfs *buf)
-{
-	int err;
-
-	if (!fs->compat || fs->compat >= 25) {
-		err = fs->op.statfs(fs->compat == 25 ? "/" : path, buf);
-	} else if (fs->compat > 11) {
-		struct statfs oldbuf;
-		err = ((struct fuse_operations_compat22 *) &fs->op)
-			->statfs("/", &oldbuf);
-		if (!err)
-			convert_statfs_old(&oldbuf, buf);
-	} else {
-		struct fuse_statfs_compat1 compatbuf;
-		memset(&compatbuf, 0, sizeof(struct fuse_statfs_compat1));
-		err = ((struct fuse_operations_compat1 *) &fs->op)
-			->statfs(&compatbuf);
-		if (!err)
-			convert_statfs_compat(&compatbuf, buf);
-	}
-	return err;
-}
-
-#else /* __FreeBSD__ || __NetBSD__ */
-
-static inline int fuse_compat_open(struct fuse_fs *fs, char *path,
-				   struct fuse_file_info *fi)
-{
-	return fs->op.open(path, fi);
-}
-
-static inline int fuse_compat_release(struct fuse_fs *fs, const char *path,
-				      struct fuse_file_info *fi)
-{
-	return fs->op.release(path, fi);
-}
-
-static inline int fuse_compat_opendir(struct fuse_fs *fs, const char *path,
-				      struct fuse_file_info *fi)
-{
-	return fs->op.opendir(path, fi);
-}
-
-static inline int fuse_compat_statfs(struct fuse_fs *fs, const char *path,
-				     struct statvfs *buf)
-{
-	return fs->op.statfs(fs->compat == 25 ? "/" : path, buf);
-}
-
-#endif /* __FreeBSD__ || __NetBSD__ */
-
 int fuse_fs_getattr(struct fuse_fs *fs, const char *path, struct stat *buf)
 {
 	fuse_get_context()->private_data = fs->user_data;
@@ -1639,7 +1516,7 @@ int fuse_fs_release(struct fuse_fs *fs,	 const char *path,
 				fi->flush ? "+flush" : "",
 				(unsigned long long) fi->fh, fi->flags);
 
-		return fuse_compat_release(fs, path, fi);
+		return fs->op.release(path, fi);
 	} else {
 		return 0;
 	}
@@ -1656,7 +1533,7 @@ int fuse_fs_opendir(struct fuse_fs *fs, const char *path,
 			fprintf(stderr, "opendir flags: 0x%x %s\n", fi->flags,
 				path);
 
-		err = fuse_compat_opendir(fs, path, fi);
+		err = fs->op.opendir(path, fi);
 
 		if (fs->debug && !err)
 			fprintf(stderr, "   opendir[%lli] flags: 0x%x %s\n",
@@ -1679,7 +1556,7 @@ int fuse_fs_open(struct fuse_fs *fs, const char *path,
 			fprintf(stderr, "open flags: 0x%x %s\n", fi->flags,
 				path);
 
-		err = fuse_compat_open(fs, path, fi);
+		err = fs->op.open(path, fi);
 
 		if (fs->debug && !err)
 			fprintf(stderr, "   open[%lli] flags: 0x%x %s\n",
@@ -1901,7 +1778,7 @@ int fuse_fs_statfs(struct fuse_fs *fs, const char *path, struct statvfs *buf)
 		if (fs->debug)
 			fprintf(stderr, "statfs %s\n", path);
 
-		return fuse_compat_statfs(fs, path, buf);
+		return fs->op.statfs(path, buf);
 	} else {
 		buf->f_namemax = 255;
 		buf->f_bsize = 512;
@@ -3022,14 +2899,8 @@ static void fuse_do_release(struct fuse *f, fuse_ino_t ino, const char *path,
 {
 	struct node *node;
 	int unlink_hidden = 0;
-	const char *compatpath;
 
-	if (path != NULL || f->nullpath_ok || f->conf.nopath)
-		compatpath = path;
-	else
-		compatpath = "-";
-
-	fuse_fs_release(f->fs, compatpath, fi);
+	fuse_fs_release(f->fs, path, fi);
 
 	pthread_mutex_lock(&f->lock);
 	node = get_node(f, ino);
@@ -3460,16 +3331,11 @@ static void fuse_lib_releasedir(fuse_req_t req, fuse_ino_t ino,
 	struct fuse_file_info fi;
 	struct fuse_dh *dh = get_dirhandle(llfi, &fi);
 	char *path;
-	const char *compatpath;
 
 	get_path_nullok(f, ino, &path);
-	if (path != NULL || f->nullpath_ok || f->conf.nopath)
-		compatpath = path;
-	else
-		compatpath = "-";
 
 	fuse_prepare_interrupt(f, req, &d);
-	fuse_fs_releasedir(f->fs, compatpath, &fi);
+	fuse_fs_releasedir(f->fs, path, &fi);
 	fuse_finish_interrupt(f, req, &d);
 	free_path(f, ino, path);
 
@@ -4274,18 +4140,6 @@ struct fuse_context *fuse_get_context(void)
 	return &fuse_get_context_internal()->ctx;
 }
 
-/*
- * The size of fuse_context got extended, so need to be careful about
- * incompatibility (i.e. a new binary cannot work with an old
- * library).
- */
-struct fuse_context *fuse_get_context_compat22(void);
-struct fuse_context *fuse_get_context_compat22(void)
-{
-	return &fuse_get_context_internal()->ctx;
-}
-FUSE_SYMVER(".symver fuse_get_context_compat22,fuse_get_context@FUSE_2.2");
-
 int fuse_getgroups(int size, gid_t list[])
 {
 	fuse_req_t req = fuse_get_context_internal()->req;
@@ -4459,7 +4313,6 @@ static int fuse_push_module(struct fuse *f, const char *module,
 	}
 	newfs->m = m;
 	f->fs = newfs;
-	f->nullpath_ok = newfs->op.flag_nullpath_ok && f->nullpath_ok;
 	f->conf.nopath = newfs->op.flag_nopath && f->conf.nopath;
 	f->utime_omit_ok = newfs->op.flag_utime_omit_ok && f->utime_omit_ok;
 	return 0;
@@ -4531,9 +4384,9 @@ void fuse_stop_cleanup_thread(struct fuse *f)
 	}
 }
 
-struct fuse *fuse_new_common(struct fuse_chan *ch, struct fuse_args *args,
-			     const struct fuse_operations *op,
-			     size_t op_size, void *user_data, int compat)
+struct fuse *fuse_new(struct fuse_chan *ch, struct fuse_args *args,
+		      const struct fuse_operations *op,
+		      size_t op_size, void *user_data)
 {
 	struct fuse *f;
 	struct node *root;
@@ -4553,9 +4406,7 @@ struct fuse *fuse_new_common(struct fuse_chan *ch, struct fuse_args *args,
 	if (!fs)
 		goto out_free;
 
-	fs->compat = compat;
 	f->fs = fs;
-	f->nullpath_ok = fs->op.flag_nullpath_ok;
 	f->conf.nopath = fs->op.flag_nopath;
 	f->utime_omit_ok = fs->op.flag_utime_omit_ok;
 
@@ -4605,12 +4456,7 @@ struct fuse *fuse_new_common(struct fuse_chan *ch, struct fuse_args *args,
 	f->conf.readdir_ino = 1;
 #endif
 
-	if (compat && compat <= 25) {
-		if (fuse_sync_compat_args(args) == -1)
-			goto out_free_fs;
-	}
-
-	f->se = fuse_lowlevel_new_common(args, &llop, sizeof(llop), f);
+	f->se = fuse_lowlevel_new(args, &llop, sizeof(llop), f);
 	if (f->se == NULL) {
 		if (f->conf.help)
 			fuse_lib_help_modules();
@@ -4620,7 +4466,6 @@ struct fuse *fuse_new_common(struct fuse_chan *ch, struct fuse_args *args,
 	fuse_session_add_chan(f->se, ch);
 
 	if (f->conf.debug) {
-		fprintf(stderr, "nullpath_ok: %i\n", f->nullpath_ok);
 		fprintf(stderr, "nopath: %i\n", f->conf.nopath);
 		fprintf(stderr, "utime_omit_ok: %i\n", f->utime_omit_ok);
 	}
@@ -4653,9 +4498,7 @@ struct fuse *fuse_new_common(struct fuse_chan *ch, struct fuse_args *args,
 
 	root->parent = NULL;
 	root->nodeid = FUSE_ROOT_ID;
-	root->generation = 0;
-	root->refctr = 1;
-	root->nlookup = 1;
+	inc_nlookup(root);
 	hash_id(f, root);
 
 	return f;
@@ -4680,13 +4523,6 @@ out_delete_context_key:
 	fuse_delete_context_key();
 out:
 	return NULL;
-}
-
-struct fuse *fuse_new(struct fuse_chan *ch, struct fuse_args *args,
-		      const struct fuse_operations *op, size_t op_size,
-		      void *user_data)
-{
-	return fuse_new_common(ch, args, op, op_size, user_data, 0);
 }
 
 void fuse_destroy(struct fuse *f)
@@ -4739,19 +4575,6 @@ void fuse_destroy(struct fuse *f)
 	fuse_delete_context_key();
 }
 
-static struct fuse *fuse_new_common_compat25(int fd, struct fuse_args *args,
-					     const struct fuse_operations *op,
-					     size_t op_size, int compat)
-{
-	struct fuse *f = NULL;
-	struct fuse_chan *ch = fuse_kern_chan_new(fd);
-
-	if (ch)
-		f = fuse_new_common(ch, args, op, op_size, NULL, compat);
-
-	return f;
-}
-
 /* called with fuse_context_lock held or during initialization (before
    main() has been called) */
 void fuse_register_module(struct fuse_module *mod)
@@ -4763,72 +4586,3 @@ void fuse_register_module(struct fuse_module *mod)
 	mod->next = fuse_modules;
 	fuse_modules = mod;
 }
-
-#if !defined(__FreeBSD__) && !defined(__NetBSD__)
-
-static struct fuse *fuse_new_common_compat(int fd, const char *opts,
-					   const struct fuse_operations *op,
-					   size_t op_size, int compat)
-{
-	struct fuse *f;
-	struct fuse_args args = FUSE_ARGS_INIT(0, NULL);
-
-	if (fuse_opt_add_arg(&args, "") == -1)
-		return NULL;
-	if (opts &&
-	    (fuse_opt_add_arg(&args, "-o") == -1 ||
-	     fuse_opt_add_arg(&args, opts) == -1)) {
-		fuse_opt_free_args(&args);
-		return NULL;
-	}
-	f = fuse_new_common_compat25(fd, &args, op, op_size, compat);
-	fuse_opt_free_args(&args);
-
-	return f;
-}
-
-struct fuse *fuse_new_compat22(int fd, const char *opts,
-			       const struct fuse_operations_compat22 *op,
-			       size_t op_size)
-{
-	return fuse_new_common_compat(fd, opts, (struct fuse_operations *) op,
-				      op_size, 22);
-}
-
-struct fuse *fuse_new_compat2(int fd, const char *opts,
-			      const struct fuse_operations_compat2 *op)
-{
-	return fuse_new_common_compat(fd, opts, (struct fuse_operations *) op,
-				      sizeof(struct fuse_operations_compat2),
-				      21);
-}
-
-struct fuse *fuse_new_compat1(int fd, int flags,
-			      const struct fuse_operations_compat1 *op)
-{
-	const char *opts = NULL;
-	if (flags & FUSE_DEBUG_COMPAT1)
-		opts = "debug";
-	return fuse_new_common_compat(fd, opts, (struct fuse_operations *) op,
-				      sizeof(struct fuse_operations_compat1),
-				      11);
-}
-
-FUSE_SYMVER(".symver fuse_exited,__fuse_exited@");
-FUSE_SYMVER(".symver fuse_process_cmd,__fuse_process_cmd@");
-FUSE_SYMVER(".symver fuse_read_cmd,__fuse_read_cmd@");
-FUSE_SYMVER(".symver fuse_set_getcontext_func,__fuse_set_getcontext_func@");
-FUSE_SYMVER(".symver fuse_new_compat2,fuse_new@");
-FUSE_SYMVER(".symver fuse_new_compat22,fuse_new@FUSE_2.2");
-
-#endif /* __FreeBSD__ || __NetBSD__  */
-
-struct fuse *fuse_new_compat25(int fd, struct fuse_args *args,
-			       const struct fuse_operations_compat25 *op,
-			       size_t op_size)
-{
-	return fuse_new_common_compat25(fd, args, (struct fuse_operations *) op,
-					op_size, 25);
-}
-
-FUSE_SYMVER(".symver fuse_new_compat25,fuse_new@FUSE_2.5");

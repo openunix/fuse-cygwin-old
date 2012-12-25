@@ -13,15 +13,8 @@
  *
  * This file defines the library interface of FUSE
  *
- * IMPORTANT: you should define FUSE_USE_VERSION before including this
- * header.  To use the newest API define it to 26 (recommended for any
- * new application), to use the old API define it to 21 (default) 22
- * or 25, to use the even older 1.X API define it to 11.
+ * IMPORTANT: you should define FUSE_USE_VERSION before including this header.
  */
-
-#ifndef FUSE_USE_VERSION
-#define FUSE_USE_VERSION 21
-#endif
 
 #include "fuse_common.h"
 
@@ -86,6 +79,30 @@ typedef int (*fuse_dirfil_t) (fuse_dirh_t h, const char *name, int type,
  * is also a snapshot of the relevant wiki pages in the doc/ folder.
  */
 struct fuse_operations {
+	/**
+	 * Flag indicating that the path need not be calculated for
+	 * the following operations:
+	 *
+	 * read, write, flush, release, fsync, readdir, releasedir,
+	 * fsyncdir, ftruncate, fgetattr, lock, ioctl and poll
+	 *
+	 * If this flag is set then the path will not be calculaged even if the
+	 * file wasn't unlinked.  However the path can still be non-NULL if it
+	 * needs to be calculated for some other reason.
+	 */
+	unsigned int flag_nopath:1;
+
+	/**
+	 * Flag indicating that the filesystem accepts special
+	 * UTIME_NOW and UTIME_OMIT values in its utimens operation.
+	 */
+	unsigned int flag_utime_omit_ok:1;
+
+	/**
+	 * Reserved flags, don't set
+	 */
+	unsigned int flag_reserved:30;
+
 	/** Get file attributes.
 	 *
 	 * Similar to stat().  The 'st_dev' and 'st_blksize' fields are
@@ -452,43 +469,6 @@ struct fuse_operations {
 	 * Introduced in version 2.6
 	 */
 	int (*bmap) (const char *, size_t blocksize, uint64_t *idx);
-
-	/**
-	 * Flag indicating that the filesystem can accept a NULL path
-	 * as the first argument for the following operations:
-	 *
-	 * read, write, flush, release, fsync, readdir, releasedir,
-	 * fsyncdir, ftruncate, fgetattr, lock, ioctl and poll
-	 *
-	 * If this flag is set these operations continue to work on
-	 * unlinked files even if "-ohard_remove" option was specified.
-	 */
-	unsigned int flag_nullpath_ok:1;
-
-	/**
-	 * Flag indicating that the path need not be calculated for
-	 * the following operations:
-	 *
-	 * read, write, flush, release, fsync, readdir, releasedir,
-	 * fsyncdir, ftruncate, fgetattr, lock, ioctl and poll
-	 *
-	 * Closely related to flag_nullpath_ok, but if this flag is
-	 * set then the path will not be calculaged even if the file
-	 * wasn't unlinked.  However the path can still be non-NULL if
-	 * it needs to be calculated for some other reason.
-	 */
-	unsigned int flag_nopath:1;
-
-	/**
-	 * Flag indicating that the filesystem accepts special
-	 * UTIME_NOW and UTIME_OMIT values in its utimens operation.
-	 */
-	unsigned int flag_utime_omit_ok:1;
-
-	/**
-	 * Reserved flags, don't set
-	 */
-	unsigned int flag_reserved:29;
 
 	/**
 	 * Ioctl
@@ -1003,53 +983,6 @@ void fuse_set_getcontext_func(struct fuse_context *(*func)(void));
 
 /** Get session from fuse object */
 struct fuse_session *fuse_get_session(struct fuse *f);
-
-/* ----------------------------------------------------------- *
- * Compatibility stuff					       *
- * ----------------------------------------------------------- */
-
-#if FUSE_USE_VERSION < 26
-#  include "fuse_compat.h"
-#  undef fuse_main
-#  if FUSE_USE_VERSION == 25
-#    define fuse_main(argc, argv, op)				\
-	fuse_main_real_compat25(argc, argv, op, sizeof(*(op)))
-#    define fuse_new fuse_new_compat25
-#    define fuse_setup fuse_setup_compat25
-#    define fuse_teardown fuse_teardown_compat22
-#    define fuse_operations fuse_operations_compat25
-#  elif FUSE_USE_VERSION == 22
-#    define fuse_main(argc, argv, op)				\
-	fuse_main_real_compat22(argc, argv, op, sizeof(*(op)))
-#    define fuse_new fuse_new_compat22
-#    define fuse_setup fuse_setup_compat22
-#    define fuse_teardown fuse_teardown_compat22
-#    define fuse_operations fuse_operations_compat22
-#    define fuse_file_info fuse_file_info_compat
-#  elif FUSE_USE_VERSION == 24
-#    error Compatibility with high-level API version 24 not supported
-#  else
-#    define fuse_dirfil_t fuse_dirfil_t_compat
-#    define __fuse_read_cmd fuse_read_cmd
-#    define __fuse_process_cmd fuse_process_cmd
-#    define __fuse_loop_mt fuse_loop_mt_proc
-#    if FUSE_USE_VERSION == 21
-#      define fuse_operations fuse_operations_compat2
-#      define fuse_main fuse_main_compat2
-#      define fuse_new fuse_new_compat2
-#      define __fuse_setup fuse_setup_compat2
-#      define __fuse_teardown fuse_teardown_compat22
-#      define __fuse_exited fuse_exited
-#      define __fuse_set_getcontext_func fuse_set_getcontext_func
-#    else
-#      define fuse_statfs fuse_statfs_compat1
-#      define fuse_operations fuse_operations_compat1
-#      define fuse_main fuse_main_compat1
-#      define fuse_new fuse_new_compat1
-#      define FUSE_DEBUG FUSE_DEBUG_COMPAT1
-#    endif
-#  endif
-#endif
 
 #ifdef __cplusplus
 }

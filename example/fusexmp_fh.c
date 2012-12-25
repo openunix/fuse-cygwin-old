@@ -9,7 +9,7 @@
   gcc -Wall fusexmp_fh.c `pkg-config fuse --cflags --libs` -lulockmgr -o fusexmp_fh
 */
 
-#define FUSE_USE_VERSION 26
+#define FUSE_USE_VERSION 30
 
 #ifdef HAVE_CONFIG_H
 #include <config.h>
@@ -554,7 +554,6 @@ static struct fuse_operations xmp_oper = {
 	.lock		= xmp_lock,
 	.flock		= xmp_flock,
 
-	.flag_nullpath_ok = 1,
 #if HAVE_UTIMENSAT
 	.flag_utime_omit_ok = 1,
 #endif

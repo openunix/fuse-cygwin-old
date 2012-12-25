@@ -6,7 +6,7 @@
   See the file COPYING.LIB
 */
 
-#define FUSE_USE_VERSION 26
+#define FUSE_USE_VERSION 30
 
 #include <fuse.h>
 #include <stdio.h>
@@ -614,7 +614,6 @@ static const struct fuse_operations subdir_oper = {
 	.flock		= subdir_flock,
 	.bmap		= subdir_bmap,
 
-	.flag_nullpath_ok = 1,
 	.flag_nopath = 1,
 };
 
