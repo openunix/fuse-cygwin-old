@@ -339,6 +339,25 @@ static void fill_entry(struct fuse_entry_out *arg,
 	convert_stat(&e->attr, &arg->attr);
 }
 
+size_t fuse_add_direntry_plus(fuse_req_t req, char *buf, size_t bufsize,
+			      const char *name,
+			      const struct fuse_entry_param *e, off_t off)
+{
+	struct fuse_entry_out *argp;
+	size_t entsize;
+
+	(void) req;
+	entsize = sizeof(*argp);
+	entsize += fuse_dirent_size(strlen(name));
+	if (entsize <= bufsize && buf){
+		argp = (struct fuse_entry_out *)buf;
+		memset(argp, 0, sizeof(*argp));
+		fill_entry(argp, e);
+		fuse_add_dirent(buf + sizeof(*argp), name, &(e->attr), off);
+	}
+	return entsize;
+}
+
 static void fill_open(struct fuse_open_out *arg,
 		      const struct fuse_file_info *f)
 {
