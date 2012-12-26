@@ -83,6 +83,9 @@
  *
  * 7.19
  *  - add FUSE_FALLOCATE
+ *
+ * 7.20
+ *  - add FUSE_READDIRPLUS
  */
 
 #ifndef _LINUX_FUSE_H

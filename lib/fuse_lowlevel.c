@@ -347,8 +347,8 @@ size_t fuse_add_direntry_plus(fuse_req_t req, char *buf, size_t bufsize,
 	size_t entsize;
 
 	(void) req;
-	entsize = sizeof(*argp);
-	entsize += fuse_dirent_size(strlen(name));
+	entsize = FUSE_DIRENT_ALIGN(FUSE_NAME_OFFSET_DIRENTPLUS +
+				    fuse_dirent_size(strlen(name)));
 	if (entsize <= bufsize && buf){
 		argp = (struct fuse_entry_out *)buf;
 		memset(argp, 0, sizeof(*argp));
@@ -1425,7 +1425,7 @@ static void do_readdir(fuse_req_t req, fuse_ino_t nodeid, const void *inarg)
 		fuse_reply_err(req, ENOSYS);
 }
 
-static void do_readdirplus(fuse_req_t req, fuse_ino_t nodeid, const void *inarg)
+static void do_readdir_plus(fuse_req_t req, fuse_ino_t nodeid, const void *inarg)
 {
 	struct fuse_read_in *arg = (struct fuse_read_in *) inarg;
 	struct fuse_file_info fi;
@@ -1434,8 +1434,8 @@ static void do_readdirplus(fuse_req_t req, fuse_ino_t nodeid, const void *inarg)
 	fi.fh = arg->fh;
 	fi.fh_old = fi.fh;
 
-	if (req->f->op.readdirplus)
-		req->f->op.readdirplus(req, nodeid, arg->size, arg->offset, &fi);
+	if (req->f->op.readdir_plus)
+		req->f->op.readdir_plus(req, nodeid, arg->size, arg->offset, &fi);
 	else
 		fuse_reply_err(req, ENOSYS);
 }
@@ -1840,6 +1840,8 @@ static void do_init(fuse_req_t req, fuse_ino_t nodeid, const void *inarg)
 			f->conn.capable |= FUSE_CAP_FLOCK_LOCKS;
 		if (arg->flags & FUSE_AUTO_INVAL_DATA)
 			f->conn.capable |= FUSE_CAP_AUTO_INVAL_DATA;
+		if (arg->flags & FUSE_DO_READDIRPLUS)
+			f->conn.capable |= FUSE_CAP_READDIR_PLUS;
 	} else {
 		f->conn.async_read = 0;
 		f->conn.max_readahead = 0;
@@ -1872,6 +1874,8 @@ static void do_init(fuse_req_t req, fuse_ino_t nodeid, const void *inarg)
 		f->conn.want |= FUSE_CAP_BIG_WRITES;
 	if (f->auto_inval_data)
 		f->conn.want |= FUSE_CAP_AUTO_INVAL_DATA;
+	if (f->op.readdir_plus && !f->no_readdir_plus)
+		f->conn.want |= FUSE_CAP_READDIR_PLUS;
 
 	if (bufsize < FUSE_MIN_READ_BUFFER) {
 		fprintf(stderr, "fuse: warning: buffer size too small: %zu\n",
@@ -1895,6 +1899,8 @@ static void do_init(fuse_req_t req, fuse_ino_t nodeid, const void *inarg)
 		f->conn.want &= ~FUSE_CAP_SPLICE_MOVE;
 	if (f->no_auto_inval_data)
 		f->conn.want &= ~FUSE_CAP_AUTO_INVAL_DATA;
+	if (f->no_readdir_plus)
+		f->conn.want &= ~FUSE_CAP_READDIR_PLUS;
 
 	if (f->conn.async_read || (f->conn.want & FUSE_CAP_ASYNC_READ))
 		outarg.flags |= FUSE_ASYNC_READ;
@@ -1912,6 +1918,8 @@ static void do_init(fuse_req_t req, fuse_ino_t nodeid, const void *inarg)
 		outarg.flags |= FUSE_FLOCK_LOCKS;
 	if (f->conn.want & FUSE_CAP_AUTO_INVAL_DATA)
 		outarg.flags |= FUSE_AUTO_INVAL_DATA;
+	if (f->conn.want & FUSE_CAP_READDIR_PLUS)
+		outarg.flags |= FUSE_DO_READDIRPLUS;
 	outarg.max_readahead = f->conn.max_readahead;
 	outarg.max_write = f->conn.max_write;
 	if (f->conn.proto_minor >= 13) {
@@ -2328,7 +2336,7 @@ static struct {
 	[FUSE_DESTROY]	   = { do_destroy,     "DESTROY"     },
 	[FUSE_NOTIFY_REPLY] = { (void *) 1,    "NOTIFY_REPLY" },
 	[FUSE_BATCH_FORGET] = { do_batch_forget, "BATCH_FORGET" },
-	[FUSE_READDIRPLUS] = { do_readdirplus,	"READDIRPLUS"},
+	[FUSE_READDIRPLUS] = { do_readdir_plus,	"READDIRPLUS"},
 	[CUSE_INIT]	   = { cuse_lowlevel_init, "CUSE_INIT"   },
 };
 
@@ -2537,6 +2545,7 @@ static const struct fuse_opt fuse_ll_opts[] = {
 	{ "no_splice_read", offsetof(struct fuse_ll, no_splice_read), 1},
 	{ "auto_inval_data", offsetof(struct fuse_ll, auto_inval_data), 1},
 	{ "no_auto_inval_data", offsetof(struct fuse_ll, no_auto_inval_data), 1},
+	{ "no_readdir_plus", offsetof(struct fuse_ll, no_readdir_plus), 1},
 	FUSE_OPT_KEY("max_read=", FUSE_OPT_KEY_DISCARD),
 	FUSE_OPT_KEY("-h", KEY_HELP),
 	FUSE_OPT_KEY("--help", KEY_HELP),
@@ -2569,6 +2578,7 @@ static void fuse_ll_help(void)
 "    -o [no_]splice_move    move data while splicing to the fuse device\n"
 "    -o [no_]splice_read    use splice to read from the fuse device\n"
 "    -o [no_]auto_inval_data  use automatic kernel cache invalidation logic\n"
+"    -o [no_]readdir_plus   use readdir_plus if possible.\n"
 );
 }
 
