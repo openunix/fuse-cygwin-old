@@ -1028,6 +1028,8 @@ struct fuse_lowlevel_ops {
 	 * fi->fh will contain the value set by the opendir method, or
 	 * will be undefined if the opendir method didn't set any value.
 	 *
+	 * Introduced in version 3.0
+	 *
 	 * Valid replies:
 	 *   fuse_reply_buf
 	 *   fuse_reply_data
