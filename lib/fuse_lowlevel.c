@@ -1388,6 +1388,21 @@ static void do_readdir(fuse_req_t req, fuse_ino_t nodeid, const void *inarg)
 		fuse_reply_err(req, ENOSYS);
 }
 
+static void do_readdirplus(fuse_req_t req, fuse_ino_t nodeid, const void *inarg)
+{
+	struct fuse_read_in *arg = (struct fuse_read_in *) inarg;
+	struct fuse_file_info fi;
+
+	memset(&fi, 0, sizeof(fi));
+	fi.fh = arg->fh;
+	fi.fh_old = fi.fh;
+
+	if (req->f->op.readdirplus)
+		req->f->op.readdirplus(req, nodeid, arg->size, arg->offset, &fi);
+	else
+		fuse_reply_err(req, ENOSYS);
+}
+
 static void do_releasedir(fuse_req_t req, fuse_ino_t nodeid, const void *inarg)
 {
 	struct fuse_release_in *arg = (struct fuse_release_in *) inarg;
@@ -2276,6 +2291,7 @@ static struct {
 	[FUSE_DESTROY]	   = { do_destroy,     "DESTROY"     },
 	[FUSE_NOTIFY_REPLY] = { (void *) 1,    "NOTIFY_REPLY" },
 	[FUSE_BATCH_FORGET] = { do_batch_forget, "BATCH_FORGET" },
+	[FUSE_READDIRPLUS] = { do_readdirplus,	"READDIRPLUS"},
 	[CUSE_INIT]	   = { cuse_lowlevel_init, "CUSE_INIT"   },
 };
 
@@ -2384,7 +2400,8 @@ static void fuse_ll_process_buf(void *data, const struct fuse_buf *buf,
 		 in->opcode != FUSE_WRITE && in->opcode != FUSE_FSYNC &&
 		 in->opcode != FUSE_RELEASE && in->opcode != FUSE_READDIR &&
 		 in->opcode != FUSE_FSYNCDIR && in->opcode != FUSE_RELEASEDIR &&
-		 in->opcode != FUSE_NOTIFY_REPLY)
+		 in->opcode != FUSE_NOTIFY_REPLY &&
+		 in->opcode != FUSE_READDIRPLUS)
 		goto reply_err;
 
 	err = ENOSYS;
