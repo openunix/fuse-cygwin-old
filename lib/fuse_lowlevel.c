@@ -347,7 +347,7 @@ size_t fuse_add_direntry_plus(fuse_req_t req, char *buf, size_t bufsize,
 
 	(void) req;
 	entsize = FUSE_DIRENT_ALIGN(FUSE_NAME_OFFSET_DIRENTPLUS +
-				    fuse_dirent_size(strlen(name)));
+				    (strlen(name)));
 	if (entsize <= bufsize && buf){
 		argp = (struct fuse_entry_out *)buf;
 		memset(argp, 0, sizeof(*argp));
