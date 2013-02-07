@@ -49,6 +49,10 @@
 
 #define NODE_TABLE_MIN_SIZE 8192
 
+typedef size_t (*add_dirent_t)(fuse_req_t req, char *buf, size_t bufsize,
+			       const char *name,
+			       const struct fuse_entry_param *e, off_t off);
+
 struct fuse_config {
 	unsigned int uid;
 	unsigned int gid;
@@ -1894,6 +1898,23 @@ int fuse_fs_readdir(struct fuse_fs *fs, const char *path, void *buf,
 	}
 }
 
+int fuse_fs_readdirplus(struct fuse_fs *fs, const char *path, void *buf,
+			 fuse_fill_dir_t filler, off_t off,
+			 struct fuse_file_info *fi)
+{
+	fuse_get_context()->private_data = fs->user_data;
+	if (fs->op.readdirplus) {
+		if (fs->debug)
+			fprintf(stderr, "readdirplus[%llu] from %llu\n",
+				(unsigned long long) fi->fh,
+				(unsigned long long) off);
+
+		return fs->op.readdirplus(path, buf, filler, off, fi);
+	} else {
+		return -ENOSYS;
+	}
+}
+
 int fuse_fs_create(struct fuse_fs *fs, const char *path, mode_t mode,
 		   struct fuse_file_info *fi)
 {
@@ -2469,6 +2490,8 @@ void fuse_fs_init(struct fuse_fs *fs, struct fuse_conn_info *conn)
 		conn->want &= ~FUSE_CAP_POSIX_LOCKS;
 	if (!fs->op.flock)
 		conn->want &= ~FUSE_CAP_FLOCK_LOCKS;
+	if (!fs->op.readdirplus)
+		conn->want &= ~FUSE_CAP_READDIRPLUS;
 	if (fs->op.init)
 		fs->user_data = fs->op.init(conn);
 }
@@ -3260,30 +3283,81 @@ static int extend_contents(struct fuse_dh *dh, unsigned minsize)
 	return 0;
 }
 
-static int fill_dir(void *dh_, const char *name, const struct stat *statp,
+static size_t add_direntry(fuse_req_t req, char *buf, size_t bufsize,
+			   const char *name, const struct fuse_entry_param *e,
+			   off_t off)
+{
+	const struct stat *statp = e ? &e->attr : NULL;
+
+	return fuse_add_direntry(req, buf, bufsize, name, statp, off);
+}
+
+static void readdir_ino_fill(struct fuse_dh *dh, const char *name,
+                             struct fuse_entry_param *e)
+{
+	struct fuse *f = dh->fuse;
+	struct node *node;
+
+	if (f->conf.readdir_ino) {
+		pthread_mutex_lock(&f->lock);
+		node = lookup_node(f, dh->nodeid, name);
+		if (node)
+			e->attr.st_ino = (ino_t) node->nodeid;
+		pthread_mutex_unlock(&f->lock);
+	}
+}
+
+static int fill_dir(void *_dh, const char *name, const struct stat *statp,
 		    off_t off)
 {
-	struct fuse_dh *dh = (struct fuse_dh *) dh_;
-	struct stat stbuf;
+	struct fuse_entry_param e = {
+		/* ino=0 tells the kernel to ignore readdirplus stat info */
+		.ino = 0,
+		.generation = 0,
+		.attr_timeout = 0,
+		.entry_timeout = 0
+	};
 	size_t newlen;
+	struct node *node;
+	add_dirent_t add_dirent = fuse_add_direntry_plus;
+	struct fuse_dh *dh = _dh;
+	struct fuse *f = dh->fuse;
+	struct fuse_conn_info *conn = &dh->req->f->conn;
 
-	if (statp)
-		stbuf = *statp;
-	else {
-		memset(&stbuf, 0, sizeof(stbuf));
-		stbuf.st_ino = FUSE_UNKNOWN_INO;
+	if (statp) {
+		e.attr = *statp;
+		if (!f->conf.use_ino)
+			e.attr.st_ino = FUSE_UNKNOWN_INO;
+	} else {
+		memset(&e.attr, 0, sizeof(e.attr));
+		e.attr.st_ino = FUSE_UNKNOWN_INO;
 	}
 
-	if (!dh->fuse->conf.use_ino) {
-		stbuf.st_ino = FUSE_UNKNOWN_INO;
-		if (dh->fuse->conf.readdir_ino) {
-			struct node *node;
-			pthread_mutex_lock(&dh->fuse->lock);
-			node = lookup_node(dh->fuse, dh->nodeid, name);
-			if (node)
-				stbuf.st_ino  = (ino_t) node->nodeid;
-			pthread_mutex_unlock(&dh->fuse->lock);
+	if ((conn->want & FUSE_CAP_READDIRPLUS) & conn->capable) {
+		if (statp) {
+			node = find_node(f, dh->nodeid, name);
+			if (!node)
+				return 1;
+
+			if (e.attr.st_ino == FUSE_UNKNOWN_INO)
+				e.attr.st_ino = (ino_t) node->nodeid;
+			if (f->conf.auto_cache) {
+				pthread_mutex_lock(&f->lock);
+				update_stat(node, &e.attr);
+				pthread_mutex_unlock(&f->lock);
+			}
+			e.generation = node->generation;
+			e.attr_timeout = f->conf.attr_timeout;
+			e.entry_timeout = f->conf.entry_timeout;
+			e.ino = e.attr.st_ino;
+		} else {
+			/* we didn't get useful stat information */
+			readdir_ino_fill(dh, name, &e);
 		}
+	} else {
+		if (e.attr.st_ino == FUSE_UNKNOWN_INO)
+			readdir_ino_fill(dh, name, &e);
+		add_dirent = add_direntry;
 	}
 
 	if (off) {
@@ -3292,19 +3366,18 @@ static int fill_dir(void *dh_, const char *name, const struct stat *statp,
 
 		dh->filled = 0;
 		newlen = dh->len +
-			fuse_add_direntry(dh->req, dh->contents + dh->len,
-					  dh->needlen - dh->len, name,
-					  &stbuf, off);
+			add_dirent(dh->req, dh->contents + dh->len,
+				   dh->needlen - dh->len, name, &e, off);
 		if (newlen > dh->needlen)
 			return 1;
 	} else {
 		newlen = dh->len +
-			fuse_add_direntry(dh->req, NULL, 0, name, NULL, 0);
+			add_dirent(dh->req, NULL, 0, name, NULL, 0);
 		if (extend_contents(dh, newlen) == -1)
 			return 1;
 
-		fuse_add_direntry(dh->req, dh->contents + dh->len,
-				  dh->size - dh->len, name, &stbuf, newlen);
+		add_dirent(dh->req, dh->contents + dh->len,
+			   dh->size - dh->len, name, &e, newlen);
 	}
 	dh->len = newlen;
 	return 0;
@@ -3312,38 +3385,43 @@ static int fill_dir(void *dh_, const char *name, const struct stat *statp,
 
 static int readdir_fill(struct fuse *f, fuse_req_t req, fuse_ino_t ino,
 			size_t size, off_t off, struct fuse_dh *dh,
-			struct fuse_file_info *fi)
+			struct fuse_file_info *fi, bool plus)
 {
 	char *path;
 	int err;
+	struct fuse_intr_data d;
 
-	if (f->fs->op.readdir)
+	if (f->fs->op.readdir || f->fs->op.readdirplus)
 		err = get_path_nullok(f, ino, &path);
 	else
 		err = get_path(f, ino, &path);
-	if (!err) {
-		struct fuse_intr_data d;
 
-		dh->len = 0;
-		dh->error = 0;
-		dh->needlen = size;
-		dh->filled = 1;
-		dh->req = req;
-		fuse_prepare_interrupt(f, req, &d);
+	if (err)
+		return err;
+
+	dh->len = 0;
+	dh->error = 0;
+	dh->needlen = size;
+	dh->filled = 1;
+	dh->req = req;
+	fuse_prepare_interrupt(f, req, &d);
+	if (plus)
+		err = fuse_fs_readdirplus(f->fs, path, dh, fill_dir, off, fi);
+	else
 		err = fuse_fs_readdir(f->fs, path, dh, fill_dir, off, fi);
-		fuse_finish_interrupt(f, req, &d);
-		dh->req = NULL;
-		if (!err)
-			err = dh->error;
-		if (err)
-			dh->filled = 0;
-		free_path(f, ino, path);
-	}
+	fuse_finish_interrupt(f, req, &d);
+	dh->req = NULL;
+	if (!err)
+		err = dh->error;
+	if (err)
+		dh->filled = 0;
+	free_path(f, ino, path);
+
 	return err;
 }
 
-static void fuse_lib_readdir(fuse_req_t req, fuse_ino_t ino, size_t size,
-			     off_t off, struct fuse_file_info *llfi)
+static void readdir_common(fuse_req_t req, fuse_ino_t ino, size_t size,
+			   off_t off, struct fuse_file_info *llfi, bool plus)
 {
 	struct fuse *f = req_fuse_prepare(req);
 	struct fuse_file_info fi;
@@ -3356,7 +3434,7 @@ static void fuse_lib_readdir(fuse_req_t req, fuse_ino_t ino, size_t size,
 		dh->filled = 0;
 
 	if (!dh->filled) {
-		int err = readdir_fill(f, req, ino, size, off, dh, &fi);
+		int err = readdir_fill(f, req, ino, size, off, dh, &fi, plus);
 		if (err) {
 			reply_err(req, err);
 			goto out;
@@ -3375,6 +3453,18 @@ static void fuse_lib_readdir(fuse_req_t req, fuse_ino_t ino, size_t size,
 	fuse_reply_buf(req, dh->contents + off, size);
 out:
 	pthread_mutex_unlock(&dh->lock);
+}
+
+static void fuse_lib_readdir(fuse_req_t req, fuse_ino_t ino, size_t size,
+			     off_t off, struct fuse_file_info *llfi)
+{
+	readdir_common(req, ino, size, off, llfi, false);
+}
+
+static void fuse_lib_readdirplus(fuse_req_t req, fuse_ino_t ino, size_t size,
+				  off_t off, struct fuse_file_info *llfi)
+{
+	readdir_common(req, ino, size, off, llfi, true);
 }
 
 static void fuse_lib_releasedir(fuse_req_t req, fuse_ino_t ino,
@@ -4026,6 +4116,7 @@ static struct fuse_lowlevel_ops fuse_path_ops = {
 	.fsync = fuse_lib_fsync,
 	.opendir = fuse_lib_opendir,
 	.readdir = fuse_lib_readdir,
+	.readdirplus = fuse_lib_readdirplus,
 	.releasedir = fuse_lib_releasedir,
 	.fsyncdir = fuse_lib_fsyncdir,
 	.statfs = fuse_lib_statfs,

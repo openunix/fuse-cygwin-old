@@ -351,6 +351,7 @@ size_t fuse_add_direntry_plus(fuse_req_t req, char *buf, size_t bufsize,
 				    (strlen(name)));
 	if (entsize <= bufsize && buf){
 		argp = (struct fuse_entry_out *)buf;
+		assert(e); /* e must be specified with buf */
 		memset(argp, 0, sizeof(*argp));
 		fill_entry(argp, e);
 		fuse_add_dirent(buf + sizeof(*argp), name, &(e->attr), off);

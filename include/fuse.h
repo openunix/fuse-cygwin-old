@@ -568,6 +568,15 @@ struct fuse_operations {
 	 */
 	int (*fallocate) (const char *, int, off_t, off_t,
 			  struct fuse_file_info *);
+
+	/*
+	 * Same as readdir, except the filesystem may fill in complete
+	 * stat attributes in the fuse_fill_dir_t function.
+	 *
+	 * Introduced in version 3.0
+	 */
+	int (*readdirplus) (const char *, void *, fuse_fill_dir_t, off_t,
+			     struct fuse_file_info *);
 };
 
 /** Extra context that may be needed by some filesystems
@@ -825,6 +834,9 @@ int fuse_fs_opendir(struct fuse_fs *fs, const char *path,
 int fuse_fs_readdir(struct fuse_fs *fs, const char *path, void *buf,
 		    fuse_fill_dir_t filler, off_t off,
 		    struct fuse_file_info *fi);
+int fuse_fs_readdirplus(struct fuse_fs *fs, const char *path, void *buf,
+		         fuse_fill_dir_t filler, off_t off,
+		         struct fuse_file_info *fi);
 int fuse_fs_fsyncdir(struct fuse_fs *fs, const char *path, int datasync,
 		     struct fuse_file_info *fi);
 int fuse_fs_releasedir(struct fuse_fs *fs, const char *path,

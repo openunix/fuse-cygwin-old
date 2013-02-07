@@ -93,6 +93,7 @@ FUSE_3.0 {
 		fuse_fs_opendir;
 		fuse_fs_read;
 		fuse_fs_readdir;
+		fuse_fs_readdirplus;
 		fuse_fs_readlink;
 		fuse_fs_release;
 		fuse_fs_releasedir;
