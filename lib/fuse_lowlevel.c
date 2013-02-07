@@ -1843,6 +1843,8 @@ static void do_init(fuse_req_t req, fuse_ino_t nodeid, const void *inarg)
 			f->conn.capable |= FUSE_CAP_AUTO_INVAL_DATA;
 		if (arg->flags & FUSE_DO_READDIRPLUS)
 			f->conn.capable |= FUSE_CAP_READDIRPLUS;
+		if (arg->flags & FUSE_READDIRPLUS_AUTO)
+			f->conn.capable |= FUSE_CAP_READDIRPLUS_AUTO;
 	} else {
 		f->conn.async_read = 0;
 		f->conn.max_readahead = 0;
@@ -1875,8 +1877,13 @@ static void do_init(fuse_req_t req, fuse_ino_t nodeid, const void *inarg)
 		f->conn.want |= FUSE_CAP_BIG_WRITES;
 	if (f->auto_inval_data)
 		f->conn.want |= FUSE_CAP_AUTO_INVAL_DATA;
-	if (f->op.readdirplus && !f->no_readdirplus)
-		f->conn.want |= FUSE_CAP_READDIRPLUS;
+	if (f->op.readdirplus) {
+		if (strcmp(f->readdirplus_type, "auto") == 0)
+			f->conn.want |= FUSE_CAP_READDIRPLUS
+			                | FUSE_CAP_READDIRPLUS_AUTO;
+		if (strcmp(f->readdirplus_type, "yes") == 0)
+			f->conn.want |= FUSE_CAP_READDIRPLUS;
+	}
 
 	if (bufsize < FUSE_MIN_READ_BUFFER) {
 		fprintf(stderr, "fuse: warning: buffer size too small: %zu\n",
@@ -1900,9 +1907,10 @@ static void do_init(fuse_req_t req, fuse_ino_t nodeid, const void *inarg)
 		f->conn.want &= ~FUSE_CAP_SPLICE_MOVE;
 	if (f->no_auto_inval_data)
 		f->conn.want &= ~FUSE_CAP_AUTO_INVAL_DATA;
-	if (f->no_readdirplus)
+	if (strcmp(f->readdirplus_type, "no") == 0)
 		f->conn.want &= ~FUSE_CAP_READDIRPLUS;
-
+	if (strcmp(f->readdirplus_type, "yes") == 0)
+		f->conn.want &= ~FUSE_CAP_READDIRPLUS_AUTO;
 	if (f->conn.async_read || (f->conn.want & FUSE_CAP_ASYNC_READ))
 		outarg.flags |= FUSE_ASYNC_READ;
 	if (f->conn.want & FUSE_CAP_POSIX_LOCKS)
@@ -1921,6 +1929,8 @@ static void do_init(fuse_req_t req, fuse_ino_t nodeid, const void *inarg)
 		outarg.flags |= FUSE_AUTO_INVAL_DATA;
 	if (f->conn.want & FUSE_CAP_READDIRPLUS)
 		outarg.flags |= FUSE_DO_READDIRPLUS;
+	if (f->conn.want & FUSE_CAP_READDIRPLUS_AUTO)
+		outarg.flags |= FUSE_CAP_READDIRPLUS_AUTO;
 	outarg.max_readahead = f->conn.max_readahead;
 	outarg.max_write = f->conn.max_write;
 	if (f->conn.proto_minor >= 13) {
@@ -2546,7 +2556,7 @@ static const struct fuse_opt fuse_ll_opts[] = {
 	{ "no_splice_read", offsetof(struct fuse_ll, no_splice_read), 1},
 	{ "auto_inval_data", offsetof(struct fuse_ll, auto_inval_data), 1},
 	{ "no_auto_inval_data", offsetof(struct fuse_ll, no_auto_inval_data), 1},
-	{ "no_readdirplus", offsetof(struct fuse_ll, no_readdirplus), 1},
+	{ "readdirplus=%s", offsetof(struct fuse_ll, readdirplus_type), 1},
 	FUSE_OPT_KEY("max_read=", FUSE_OPT_KEY_DISCARD),
 	FUSE_OPT_KEY("-h", KEY_HELP),
 	FUSE_OPT_KEY("--help", KEY_HELP),
@@ -2579,7 +2589,7 @@ static void fuse_ll_help(void)
 "    -o [no_]splice_move    move data while splicing to the fuse device\n"
 "    -o [no_]splice_read    use splice to read from the fuse device\n"
 "    -o [no_]auto_inval_data  use automatic kernel cache invalidation logic\n"
-"    -o [no_]readdirplus   use readdirplus if possible.\n"
+"    -o readdirplus=S       control readdirplus use (yes|no|auto)\n"
 );
 }
 
@@ -2624,6 +2634,7 @@ static void fuse_ll_destroy(void *data)
 	pthread_key_delete(f->pipe_key);
 	pthread_mutex_destroy(&f->lock);
 	free(f->cuse_data);
+	free(f->readdirplus_type);
 	free(f);
 }
 
@@ -2747,6 +2758,28 @@ static int fuse_ll_receive_buf(struct fuse_session *se, struct fuse_buf *buf,
 }
 #endif
 
+static int fuse_readdirplus_validate(struct fuse_ll *f)
+{
+	static const char allowed[] = "yes\0no\0auto\0";
+	const char *cur;
+
+	if (!f->readdirplus_type) {
+		f->readdirplus_type = strdup("auto");
+		if (!f->readdirplus_type) {
+			fprintf(stderr, "fuse: failed to allocate memory\n");
+			return -1;
+		}
+	}
+
+	for (cur = allowed; *cur; cur = strchr(cur, 0) + 1) {
+		if (strcmp(f->readdirplus_type, cur) == 0)
+			return 0;
+	}
+
+	fprintf(stderr, "invalid value for readdirplus=%s\n",
+	        f->readdirplus_type);
+	return -1;
+}
 
 struct fuse_session *fuse_lowlevel_new(struct fuse_args *args,
 				       const struct fuse_lowlevel_ops *op,
@@ -2790,6 +2823,8 @@ struct fuse_session *fuse_lowlevel_new(struct fuse_args *args,
 
 	if (fuse_opt_parse(args, f, fuse_ll_opts, fuse_ll_opt_proc) == -1)
 		goto out_key_destroy;
+	if (fuse_readdirplus_validate(f) == -1)
+		goto out_key_destroy;
 
 	if (f->debug)
 		fprintf(stderr, "FUSE library version: %s\n", PACKAGE_VERSION);
@@ -2811,6 +2846,7 @@ out_key_destroy:
 	pthread_key_delete(f->pipe_key);
 out_free:
 	pthread_mutex_destroy(&f->lock);
+	free(f->readdirplus_type);
 	free(f);
 out:
 	return NULL;

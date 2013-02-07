@@ -212,6 +212,7 @@ struct fuse_file_lock {
 #define FUSE_FLOCK_LOCKS	(1 << 10)
 #define FUSE_AUTO_INVAL_DATA	(1 << 12)
 #define FUSE_DO_READDIRPLUS	(1 << 13)
+#define FUSE_READDIRPLUS_AUTO	(1 << 14)
 
 /**
  * CUSE INIT request/reply flags
