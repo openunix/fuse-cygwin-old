@@ -83,17 +83,28 @@
  *
  * 7.19
  *  - add FUSE_FALLOCATE
+ *
+ * 7.20
+ *  - add FUSE_AUTO_INVAL_DATA
+ *
+ * 7.21
+ *  - add FUSE_READDIRPLUS
+ *  - send the requested events in POLL request
  */
 
 #ifndef _LINUX_FUSE_H
 #define _LINUX_FUSE_H
 
-#include <sys/types.h>
+#ifdef __linux__
+#include <linux/types.h>
+#else
+#include <stdint.h>
 #define __u64 uint64_t
 #define __s64 int64_t
 #define __u32 uint32_t
 #define __s32 int32_t
 #define __u16 uint16_t
+#endif
 
 /*
  * Version negotiation:
@@ -119,7 +130,7 @@
 #define FUSE_KERNEL_VERSION 7
 
 /** Minor version number of this interface */
-#define FUSE_KERNEL_MINOR_VERSION 19
+#define FUSE_KERNEL_MINOR_VERSION 21
 
 /** The node ID of the root inode */
 #define FUSE_ROOT_ID 1
@@ -194,10 +205,21 @@ struct fuse_file_lock {
 /**
  * INIT request/reply flags
  *
+ * FUSE_ASYNC_READ: asynchronous read requests
  * FUSE_POSIX_LOCKS: remote locking for POSIX file locks
+ * FUSE_FILE_OPS: kernel sends file handle for fstat, etc... (not yet supported)
+ * FUSE_ATOMIC_O_TRUNC: handles the O_TRUNC open flag in the filesystem
  * FUSE_EXPORT_SUPPORT: filesystem handles lookups of "." and ".."
+ * FUSE_BIG_WRITES: filesystem can handle write size larger than 4kB
  * FUSE_DONT_MASK: don't apply umask to file mode on create operations
+ * FUSE_SPLICE_WRITE: kernel supports splice write on the device
+ * FUSE_SPLICE_MOVE: kernel supports splice move on the device
+ * FUSE_SPLICE_READ: kernel supports splice read on the device
  * FUSE_FLOCK_LOCKS: remote locking for BSD style file locks
+ * FUSE_HAS_IOCTL_DIR: kernel supports ioctl on directories
+ * FUSE_AUTO_INVAL_DATA: automatically invalidate cached pages
+ * FUSE_DO_READDIRPLUS: do READDIRPLUS (READDIR+LOOKUP in one)
+ * FUSE_READDIRPLUS_AUTO: adaptive readdirplus
  */
 #define FUSE_ASYNC_READ		(1 << 0)
 #define FUSE_POSIX_LOCKS	(1 << 1)
@@ -206,7 +228,14 @@ struct fuse_file_lock {
 #define FUSE_EXPORT_SUPPORT	(1 << 4)
 #define FUSE_BIG_WRITES		(1 << 5)
 #define FUSE_DONT_MASK		(1 << 6)
+#define FUSE_SPLICE_WRITE	(1 << 7)
+#define FUSE_SPLICE_MOVE	(1 << 8)
+#define FUSE_SPLICE_READ	(1 << 9)
 #define FUSE_FLOCK_LOCKS	(1 << 10)
+#define FUSE_HAS_IOCTL_DIR	(1 << 11)
+#define FUSE_AUTO_INVAL_DATA	(1 << 12)
+#define FUSE_DO_READDIRPLUS	(1 << 13)
+#define FUSE_READDIRPLUS_AUTO	(1 << 14)
 
 /**
  * CUSE INIT request/reply flags
@@ -313,6 +342,7 @@ enum fuse_opcode {
 	FUSE_NOTIFY_REPLY  = 41,
 	FUSE_BATCH_FORGET  = 42,
 	FUSE_FALLOCATE     = 43,
+	FUSE_READDIRPLUS   = 44,
 
 	/* CUSE specific operations */
 	CUSE_INIT          = 4096,
@@ -594,7 +624,7 @@ struct fuse_poll_in {
 	__u64	fh;
 	__u64	kh;
 	__u32	flags;
-	__u32   padding;
+	__u32   events;
 };
 
 struct fuse_poll_out {
@@ -643,6 +673,16 @@ struct fuse_dirent {
 #define FUSE_DIRENT_ALIGN(x) (((x) + sizeof(__u64) - 1) & ~(sizeof(__u64) - 1))
 #define FUSE_DIRENT_SIZE(d) \
 	FUSE_DIRENT_ALIGN(FUSE_NAME_OFFSET + (d)->namelen)
+
+struct fuse_direntplus {
+	struct fuse_entry_out entry_out;
+	struct fuse_dirent dirent;
+};
+
+#define FUSE_NAME_OFFSET_DIRENTPLUS \
+	offsetof(struct fuse_direntplus, dirent.name)
+#define FUSE_DIRENTPLUS_SIZE(d) \
+	FUSE_DIRENT_ALIGN(FUSE_NAME_OFFSET_DIRENTPLUS + (d)->dirent.namelen)
 
 struct fuse_notify_inval_inode_out {
 	__u64	ino;

@@ -84,6 +84,11 @@ struct fuse_file_info {
 
 	/** Lock owner id.  Available in locking operations and flush */
 	uint64_t lock_owner;
+
+	/** Requested poll events.  Available in ->poll.  Only set on kernels
+	    which support it.  If unsupported, this field is set to zero.
+	    Introduced in version 3.0 */
+	uint32_t poll_events;
 };
 
 /**
@@ -100,17 +105,20 @@ struct fuse_file_info {
  * FUSE_CAP_SPLICE_READ: ability to use splice() to read from the fuse device
  * FUSE_CAP_IOCTL_DIR: ioctl support on directories
  */
-#define FUSE_CAP_ASYNC_READ	(1 << 0)
-#define FUSE_CAP_POSIX_LOCKS	(1 << 1)
-#define FUSE_CAP_ATOMIC_O_TRUNC	(1 << 3)
-#define FUSE_CAP_EXPORT_SUPPORT	(1 << 4)
-#define FUSE_CAP_BIG_WRITES	(1 << 5)
-#define FUSE_CAP_DONT_MASK	(1 << 6)
-#define FUSE_CAP_SPLICE_WRITE	(1 << 7)
-#define FUSE_CAP_SPLICE_MOVE	(1 << 8)
-#define FUSE_CAP_SPLICE_READ	(1 << 9)
-#define FUSE_CAP_FLOCK_LOCKS	(1 << 10)
-#define FUSE_CAP_IOCTL_DIR	(1 << 11)
+#define FUSE_CAP_ASYNC_READ		(1 << 0)
+#define FUSE_CAP_POSIX_LOCKS		(1 << 1)
+#define FUSE_CAP_ATOMIC_O_TRUNC		(1 << 3)
+#define FUSE_CAP_EXPORT_SUPPORT		(1 << 4)
+#define FUSE_CAP_BIG_WRITES		(1 << 5)
+#define FUSE_CAP_DONT_MASK		(1 << 6)
+#define FUSE_CAP_SPLICE_WRITE		(1 << 7)
+#define FUSE_CAP_SPLICE_MOVE		(1 << 8)
+#define FUSE_CAP_SPLICE_READ		(1 << 9)
+#define FUSE_CAP_FLOCK_LOCKS		(1 << 10)
+#define FUSE_CAP_IOCTL_DIR		(1 << 11)
+#define FUSE_CAP_AUTO_INVAL_DATA 	(1 << 12)
+#define FUSE_CAP_READDIRPLUS		(1 << 13)
+#define FUSE_CAP_READDIRPLUS_AUTO	(1 << 14)
 
 /**
  * Ioctl flags

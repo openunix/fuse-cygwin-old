@@ -1,7 +1,18 @@
+2013-02-07  Miklos Szeredi <miklos@szeredi.hu>
+
+	* libfuse: add readdirplus support in fuse_lowlevel_ops.  Patch by
+	Feng Shuo
+
+	* libfuse: add poll_events to fuse_file_info.  Patch by Enke Chen
+
+	* libfuse: fix fs cleanup.  Reported by Eric Wong
+
 2013-02-06  Miklos Szeredi <miklos@szeredi.hu>
 
 	* libfuse: set close-on-exec flag on pipe file descriptors.  Patch
 	by Eric Wong
+
+	* libfuse: add missing INIT flags
 
 2013-02-05  Miklos Szeredi <miklos@szeredi.hu>
 
