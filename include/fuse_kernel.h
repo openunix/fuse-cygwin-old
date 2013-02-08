@@ -207,7 +207,6 @@ struct fuse_file_lock {
 #define FUSE_BIG_WRITES		(1 << 5)
 #define FUSE_DONT_MASK		(1 << 6)
 #define FUSE_FLOCK_LOCKS	(1 << 10)
-#define FUSE_AUTO_INVAL_DATA	(1 << 12)
 
 /**
  * CUSE INIT request/reply flags
